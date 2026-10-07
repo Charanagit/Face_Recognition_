@@ -1,4 +1,22 @@
-# Virtual environments (huge!)
+# Node & Next.js
+node_modules/
+frontend/node_modules/
+.next/
+frontend/.next/
+out/
+frontend/out/
+.env*.local
+
+# Standalone bundles & large binaries
+*.zip
+*.exe
+*.onnx
+models/
+dist/
+build/
+*.spec
+
+# Python virtual environment
 venv/
 venv_*/
 .venv/
@@ -11,27 +29,14 @@ __pycache__/
 *.pyc
 *.pyo
 *.pyd
+*.whl
 
-# Build / packaging output (PyInstaller etc.)
-build/
-dist/
-*.spec               # ← optional: remove this line if you WANT to commit FaceAttendance.spec
-*.egg-info/
-*.egg
-
-# Data & sensitive files (face embeddings, db, photos)
+# Data & sensitive files
 data/
 *.pkl
 *.db
 *.sqlite
 *.sqlite3
-
-# Images / icons (unless you want them public)
-*.png               # OnTech.png etc.
-*.ico
-*.jpg
-*.jpeg
-*.heic
 
 # Temp / editor files
 *.log
@@ -42,13 +47,8 @@ data/
 Thumbs.db
 ehthumbs.db
 
-# IDE / editor folders
+# IDE
 .idea/
 .vscode/
 *.swp
 *.swo
-
-# Windows junk
-Thumbs.db
-ehthumbs.db
-*.whl

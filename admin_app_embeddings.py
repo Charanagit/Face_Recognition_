@@ -203,20 +203,18 @@ def process_employee(emp_code, full_name, department, designation, mobile, notes
                 except Exception as e:
                     messages.append(f"Error processing {up_file.name}: {str(e)} → skipped (continuing)")
 
-        if len(embeddings) >= 3:
-            emb_stack = np.array(embeddings)  # (3, 512)
+        if len(embeddings) >= 1:
+            emb_stack = np.array(embeddings)  # (N, 512)
             mean_emb = np.mean(emb_stack, axis=0)
             mean_emb_norm = normalize(mean_emb)
             
             if mean_emb_norm.shape == (512,):
                 embedding_to_save = mean_emb_norm.tobytes()
-                messages.append(f"Mean embedding created: 2048 bytes (512 floats)")
+                messages.append(f"Mean embedding created from {len(embeddings)} photo(s): 2048 bytes (512 floats)")
             else:
                 messages.append(f"CRITICAL: Mean shape wrong {mean_emb_norm.shape} — no embedding saved")
-        elif len(embeddings) > 0:
-            messages.append(f"⚠️ Only {len(embeddings)} valid photos (need ≥3 for mean embedding)")
         else:
-            messages.append("⚠️ No valid photos → saving without embedding")
+            messages.append("⚠️ No valid photos → saving metadata without embedding")
 
     # Save / upsert to Supabase (new structure)
     with st.spinner("Saving to Supabase..."):

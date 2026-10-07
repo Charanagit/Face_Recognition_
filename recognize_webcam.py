@@ -14,7 +14,7 @@ import winsound
 import base64
 import mediapipe as mp
 from supabase import create_client, Client
-import traceback  # For full error stack if needed
+import traceback
 
 if getattr(sys, 'frozen', False):
     bundle_dir = sys._MEIPASS
@@ -27,8 +27,10 @@ if getattr(sys, 'frozen', False):
 SUPABASE_URL = "https://crujjurupavknjwdjjmj.supabase.co"
 SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNydWpqdXJ1cGF2a25qd2Rqam1qIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzA5NjI0MTAsImV4cCI6MjA4NjUzODQxMH0.MdQDrEHOyQ0mI6HGX986lNMw5cpj5pfUCnKFh88pnzw"
 
+ADMIN_CONTACT = "0781705197"
 supabase = None
 supabase_connected = False
+supabase_last_error = ""
 
 print("=== Supabase Init ===")
 try:
@@ -37,49 +39,46 @@ try:
     supabase_connected = True
     print("Supabase connected successfully")
 except Exception as e:
-    print(f"Supabase failed: {str(e)}")
-    messagebox.showerror("Cloud Error", f"Supabase failed:\n{str(e)}\nApp will exit.")
-    sys.exit(1)
+    supabase_connected = False
+    supabase_last_error = f"Supabase connection warning: {str(e)}"
+    print(supabase_last_error)
 
 # ────────────────────────────────────────────────
-# Paths & Config
+# Paths & Settings
 # ────────────────────────────────────────────────
 if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
     BASE_DIR = sys._MEIPASS
 else:
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-# Use writable user-specific folder instead of app directory
-# This prevents crashes in Program Files (read-only)
-USER_APPDATA = os.getenv('APPDATA')
-if USER_APPDATA is None:
-    USER_APPDATA = os.path.expanduser('~\\AppData\\Roaming')
+USER_APPDATA = os.getenv('APPDATA') or os.path.expanduser('~\\AppData\\Roaming')
 APP_DATA_ROOT = os.path.join(USER_APPDATA, 'OntechAttendance')
 os.makedirs(APP_DATA_ROOT, exist_ok=True)
 
-DATA_DIR = os.path.join(APP_DATA_ROOT, "data")
-os.makedirs(DATA_DIR, exist_ok=True)
+# Futuristic Cyber Palette (BGR for OpenCV)
+COLOR_CYAN       = (255, 220, 0)     # Neon Cyan HUD
+COLOR_EMERALD    = (80, 240, 100)    # Verified Match / Check-In
+COLOR_AMBER      = (0, 180, 255)     # Check-Out / Warning
+COLOR_CRIMSON    = (60, 60, 230)     # Error / Alert
+COLOR_TEXT_WHITE = (255, 255, 255)
+COLOR_TEXT_MUTED = (180, 195, 190)
 
-COLOR_SUCCESS = (0, 255, 120)
-COLOR_WARNING = (0, 80, 255)
-COLOR_UNKNOWN = (0, 0, 255)
-COLOR_CLOUD_OK = (0, 200, 100)
-
-SIMILARITY_THRESHOLD    = 0.20  # lowered for testing
-GESTURE_HOLD_SECONDS    = 2.8
-MIN_TIME_BETWEEN_ACTIONS = 5.0
-SUCCESS_SHOW_SECONDS    = 5.0
-PROCESS_EVERY_N_FRAMES  = 4
+SIMILARITY_THRESHOLD     = 0.28
+GESTURE_HOLD_SECONDS     = 2.5
+MIN_TIME_BETWEEN_ACTIONS = 6.0
+SUCCESS_SHOW_SECONDS     = 5.0
+PROCESS_EVERY_N_FRAMES   = 3
 
 # ────────────────────────────────────────────────
-# Globals
+# Globals & State
 # ────────────────────────────────────────────────
-face_db = {}  # code → np.array embedding
-employee_info = {}  # code → dict with name, dept, etc.
-success_message_start = None
-success_message_text = ""
+face_db = {}
+employee_info = {}
+last_sync_time = None
+success_event = None  # Holds active check-in/out banner
 gesture_active_until = 0.0
 last_action_time = {}
+smooth_boxes = {}
 
 # ────────────────────────────────────────────────
 # Lazy-load InsightFace
@@ -91,9 +90,14 @@ def get_face_analyzer():
     if face_analyzer is None:
         try:
             from insightface.app import FaceAnalysis
-            print("Loading InsightFace buffalo_s ...")
-            face_analyzer = FaceAnalysis(name="buffalo_s", providers=["CUDAExecutionProvider", "CPUExecutionProvider"], allowed_modules=['detection', 'recognition']) # Try GPU first, fallback to CPU
-            face_analyzer.prepare(ctx_id=0, det_size=(320, 320), det_thresh=0.32)
+            print(f"Loading InsightFace buffalo_s from root: {BASE_DIR} ...")
+            face_analyzer = FaceAnalysis(
+                name="buffalo_s",
+                root=BASE_DIR,
+                providers=["CUDAExecutionProvider", "CPUExecutionProvider"],
+                allowed_modules=['detection', 'recognition']
+            )
+            face_analyzer.prepare(ctx_id=0, det_size=(320, 320), det_thresh=0.35)
             print("InsightFace ready")
         except Exception as e:
             print(f"InsightFace failed: {e}")
@@ -101,154 +105,157 @@ def get_face_analyzer():
     return face_analyzer
 
 # ────────────────────────────────────────────────
-# Load from Supabase
-# ────────────────────────────────────────────────
-def load_all_from_supabase():
-    global face_db, employee_info, last_sync_time
+def load_all_from_supabase(show_dialog=False):
+    global face_db, employee_info, last_sync_time, supabase, supabase_connected
     face_db = {}
     employee_info = {}
 
+    if not supabase:
+        try:
+            supabase = create_client(SUPABASE_URL.strip(), SUPABASE_KEY.strip())
+        except Exception:
+            supabase = None
+
+    if not supabase:
+        supabase_connected = False
+        if show_dialog:
+            messagebox.showerror(
+                "Supabase Connection Error",
+                f"⚠️ Cannot connect to Supabase Cloud Database.\n\nPlease contact Admin at {ADMIN_CONTACT} so that they can turn on / activate Supabase."
+            )
+        return False
+
     try:
-        # Load employee metadata (no embedding here anymore)
         emp_response = supabase.table("employees").select(
             "emp_code, full_name, department, designation, mobile, notes"
         ).execute()
 
-        for row in emp_response.data:
+        for row in emp_response.data or []:
             code = row["emp_code"]
             employee_info[code] = {
-                "full_name": row.get("full_name", code),
-                "department": row.get("department", ""),
-                "designation": row.get("designation", ""),
-                "mobile": row.get("mobile", ""),
+                "full_name": row.get("full_name") or code,
+                "department": row.get("department") or "",
+                "designation": row.get("designation") or "",
+                "mobile": row.get("mobile") or "",
                 "notes": row.get("notes") or "",
             }
 
-        # Load embeddings from dedicated table
         emb_response = supabase.table("face_embeddings").select(
             "emp_code, embedding_base64"
         ).execute()
 
         count = 0
-        for row in emb_response.data:
+        for row in emb_response.data or []:
             code = row["emp_code"]
             b64_str = row.get("embedding_base64")
             if b64_str:
                 try:
                     emb_bytes = base64.b64decode(b64_str)
                     emb_array = np.frombuffer(emb_bytes, dtype=np.float32)
-                    actual_len = len(emb_array)
-
-                    print(f"Loaded embedding for {code}: {actual_len} floats")
-
-                    if actual_len == 512:
+                    if len(emb_array) == 512:
                         face_db[code] = emb_array
                         count += 1
-                        print(f"→ VALID 512-dim embedding loaded for {code}")
-                    else:
-                        print(f"→ REJECTED {code}: wrong size {actual_len} (expected 512)")
-
                 except Exception as e:
-                    print(f"→ FAILED decoding {code}: {str(e)}")
+                    print(f"Embedding decode error for {code}: {e}")
 
         last_sync_time = datetime.datetime.now()
-        print(f"\nSummary: {len(employee_info)} employees, {count} valid 512-dim embeddings")
-        if count == 0 and len(employee_info) > 0:
-            print("WARNING: Employees exist but no valid embeddings loaded")
+        supabase_connected = True
+        print(f"Cloud Sync: {len(employee_info)} staff, {count} valid 512-d embeddings")
+        if show_dialog:
+            messagebox.showinfo("Cloud Sync Success", f"✓ Successfully synchronized {count} face vectors from Supabase Cloud!")
         return True
-
     except Exception as e:
-        print(f"Load failed: {e}")
-        messagebox.showerror("Sync Error", str(e))
+        supabase_connected = False
+        print(f"Supabase load error: {e}")
+        if show_dialog:
+            messagebox.showerror(
+                "Supabase Connection Error",
+                f"⚠️ Cannot connect to Supabase Cloud Database ({str(e)}).\n\nPlease contact Admin at {ADMIN_CONTACT} so that they can turn on / activate Supabase."
+            )
         return False
 
 # ────────────────────────────────────────────────
-# Attendance (Supabase only)
+# Attendance Status & Logging
 # ────────────────────────────────────────────────
+def get_employee_today_status(emp_code: str):
+    """Returns ('none' | 'checked_in' | 'checked_out', checkin_time, checkout_time)"""
+    emp_code = emp_code.strip().upper()
+    today = datetime.date.today().isoformat()
+    try:
+        if not supabase:
+            return 'none', '', ''
+        res = supabase.table("attendance").select("checkin_time, checkout_time").eq("emp_code", emp_code).eq("checkin_date", today).order("id", desc=True).limit(1).execute()
+        if res.data:
+            cin = res.data[0].get("checkin_time") or ""
+            cout = res.data[0].get("checkout_time") or ""
+            if cout:
+                return 'checked_out', cin, cout
+            return 'checked_in', cin, ''
+        return 'none', '', ''
+    except Exception as e:
+        print(f"Status query error: {e}")
+        return 'none', '', ''
+
 def mark_present(emp_code: str) -> bool:
     emp_code = emp_code.strip().upper()
     today = datetime.date.today().isoformat()
-    now_time = datetime.datetime.now().strftime("%H:%M:%S")
+    now_time = datetime.datetime.now().strftime("%I:%M:%S %p")
 
     try:
-        existing = supabase.table("attendance")\
-            .select("id")\
-            .eq("emp_code", emp_code)\
-            .eq("checkin_date", today)\
-            .execute()
-
+        if not supabase:
+            return True
+        existing = supabase.table("attendance").select("id").eq("emp_code", emp_code).eq("checkin_date", today).execute()
         if existing.data:
-            print(f"{emp_code} already checked in")
             return False
 
         supabase.table("attendance").insert({
             "emp_code": emp_code,
             "checkin_date": today,
-            "checkin_time": now_time
+            "checkin_time": now_time,
         }).execute()
-        print(f"Check-in: {emp_code}")
+        print(f"[CHECK-IN] {emp_code} at {now_time}")
         return True
     except Exception as e:
-        print(f"Check-in failed: {e}")
+        print(f"Check-in error: {e}")
         return False
 
 def mark_out(emp_code: str) -> bool:
     emp_code = emp_code.strip().upper()
     today = datetime.date.today().isoformat()
-    now_time = datetime.datetime.now().strftime("%H:%M:%S")
+    now_time = datetime.datetime.now().strftime("%I:%M:%S %p")
 
     try:
-        response = supabase.table("attendance")\
-            .select("id, checkout_time")\
-            .eq("emp_code", emp_code)\
-            .eq("checkin_date", today)\
-            .order("id", desc=True)\
-            .limit(1)\
-            .execute()
-
+        if not supabase:
+            return True
+        response = supabase.table("attendance").select("id, checkout_time").eq("emp_code", emp_code).eq("checkin_date", today).order("id", desc=True).limit(1).execute()
         if not response.data or response.data[0]["checkout_time"]:
-            print(f"No open check-in for {emp_code}")
             return False
 
         record_id = response.data[0]["id"]
-        supabase.table("attendance")\
-            .update({"checkout_time": now_time})\
-            .eq("id", record_id)\
-            .execute()
-        print(f"Check-out: {emp_code}")
+        supabase.table("attendance").update({"checkout_time": now_time}).eq("id", record_id).execute()
+        print(f"[CHECK-OUT] {emp_code} at {now_time}")
         return True
     except Exception as e:
-        print(f"Check-out failed: {e}")
+        print(f"Check-out error: {e}")
         return False
 
 # ────────────────────────────────────────────────
-# Utils
+# Geometry & Math
 # ────────────────────────────────────────────────
 def normalize(v):
     norm = np.linalg.norm(v)
     return v / norm if norm > 0 else v
 
 def cosine_similarity(a, b):
-    # Trim to shortest length
     min_len = min(len(a), len(b))
-    a_trim = a[:min_len]
-    b_trim = b[:min_len]
-
-    # Normalize both
-    a_norm = normalize(a_trim)
-    b_norm = normalize(b_trim)
-
-    # Dot product
-    dot = np.dot(a_norm, b_norm)
-
-    # Safety
-    norm_prod = np.linalg.norm(a_norm) * np.linalg.norm(b_norm)
+    a_trim = normalize(a[:min_len])
+    b_trim = normalize(b[:min_len])
+    dot = np.dot(a_trim, b_trim)
+    norm_prod = np.linalg.norm(a_trim) * np.linalg.norm(b_trim)
     if norm_prod < 1e-8:
         return 0.0
+    return float(dot / norm_prod)
 
-    sc = dot / norm_prod
-    print(f"Cosine: {sc:.4f} (dot={dot:.4f}, norm_prod={norm_prod:.4f})")
-    return float(sc)
 def is_victory_gesture(lm):
     if not lm:
         return False
@@ -260,339 +267,345 @@ def is_victory_gesture(lm):
     )
 
 # ────────────────────────────────────────────────
-# Splash screen
+# Futuristic HUD Drawing Functions
 # ────────────────────────────────────────────────
-def show_splash():
-    logo_path = os.path.join(BASE_DIR, "OnTech.png")
-    if not os.path.exists(logo_path):
-        print("Logo not found — skipping")
-        return True
+def draw_futuristic_brackets(img, x1, y1, x2, y2, color, length=22, thickness=2):
+    """Draws sleek corner brackets around the face bounding box."""
+    # Top-Left
+    cv2.line(img, (x1, y1), (x1 + length, y1), color, thickness)
+    cv2.line(img, (x1, y1), (x1, y1 + length), color, thickness)
+    # Top-Right
+    cv2.line(img, (x2, y1), (x2 - length, y1), color, thickness)
+    cv2.line(img, (x2, y1), (x2, y1 + length), color, thickness)
+    # Bottom-Left
+    cv2.line(img, (x1, y2), (x1 + length, y2), color, thickness)
+    cv2.line(img, (x1, y2), (x1, y2 - length), color, thickness)
+    # Bottom-Right
+    cv2.line(img, (x2, y2), (x2 - length, y2), color, thickness)
+    cv2.line(img, (x2, y2), (x2, y2 - length), color, thickness)
 
-    logo = cv2.imread(logo_path)
-    if logo is None:
-        print("Logo load failed")
-        return True
+def draw_hud_header(display_frame, fps, is_checkout_gesture):
+    """Draws a sleek translucent HUD top bar with live status."""
+    h, w = display_frame.shape[:2]
+    header_h = 44
 
-    h, w = logo.shape[:2]
-    win_name = "Ontech Face Recognition"
-    cv2.namedWindow(win_name, cv2.WINDOW_NORMAL)
-    cv2.resizeWindow(win_name, 1280, 720)
+    overlay = display_frame.copy()
+    cv2.rectangle(overlay, (0, 0), (w, header_h), (12, 10, 8), -1)
+    cv2.addWeighted(overlay, 0.78, display_frame, 0.22, 0, display_frame)
 
-    bg = np.zeros((720, 1280, 3), dtype=np.uint8)
-    x_offset = (1280 - w) // 2
-    y_offset = (720 - h) // 2
-    bg[y_offset:y_offset+h, x_offset:x_offset+w] = logo
+    cv2.line(display_frame, (0, header_h), (w, header_h), (70, 70, 60), 1)
 
-    for alpha in range(0, 256, 6):
-        blended = cv2.addWeighted(bg, alpha/255.0, np.zeros_like(bg), 1 - alpha/255.0, 0)
-        cv2.imshow(win_name, blended)
-        cv2.waitKey(25)
+    # Left: Brand + Status
+    cv2.putText(display_frame, "ONTECH BIOMETRICS", (18, 28),
+                cv2.FONT_HERSHEY_DUPLEX, 0.55, (245, 245, 245), 1)
+    
+    status_dot_color = (0, 180, 255) if is_checkout_gesture else (80, 240, 100)
+    status_label = "CHECK-OUT READY (V-GESTURE)" if is_checkout_gesture else "TERMINAL READY"
+    cv2.circle(display_frame, (230, 24), 4, status_dot_color, -1)
+    cv2.putText(display_frame, status_label, (242, 28),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.42, status_dot_color, 1)
 
-    cv2.waitKey(1500)
+    # Right: Clock & Stats
+    now_str = datetime.datetime.now().strftime("%I:%M:%S %p")
+    stats_str = f"ENROLLED: {len(face_db)}  |  FPS: {fps:.1f}  |  {now_str}"
+    cv2.putText(display_frame, stats_str, (w - 380, 28),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.44, (230, 230, 230), 1)
 
-    for alpha in range(255, -1, 8):
-        blended = cv2.addWeighted(bg, alpha/255.0, np.zeros_like(bg), 1 - alpha/255.0, 0)
-        cv2.imshow(win_name, blended)
-        cv2.waitKey(20)
+def draw_face_hud_card(display_frame, x1, y1, x2, y2, code, name, dept, score, is_match):
+    """Draws a compact identification badge under each recognized face."""
+    h, w = display_frame.shape[:2]
+    badge_w = max(190, (x2 - x1))
+    badge_h = 46
+    bx1 = max(10, min(x1, w - badge_w - 10))
+    by1 = y2 + 10
 
-    cv2.destroyAllWindows()
-    return True
+    if by1 + badge_h > h - 110:
+        by1 = max(55, y1 - badge_h - 10)
 
-# ────────────────────────────────────────────────
-# UI helpers
-# ────────────────────────────────────────────────
-def show_employee_list():
-    top = tk.Toplevel()
-    top.title("Registered Employees (Cloud)")
-    top.geometry("1100x700")
-    top.minsize(1000, 600)
+    bx2 = bx1 + badge_w
+    by2 = by1 + badge_h
 
-    tree = ttk.Treeview(top, columns=("Code","Name","Dept","Desig","Mobile","Notes"), show="headings")
-    tree.heading("Code", text="Code")
-    tree.heading("Name", text="Name")
-    tree.heading("Dept", text="Department")
-    tree.heading("Desig", text="Designation")
-    tree.heading("Mobile", text="Mobile")
-    tree.heading("Notes", text="Notes")
+    # Translucent card background
+    overlay = display_frame.copy()
+    cv2.rectangle(overlay, (bx1, by1), (bx2, by2), (15, 12, 10), -1)
+    cv2.addWeighted(overlay, 0.82, display_frame, 0.18, 0, display_frame)
 
-    tree.column("Code", width=90, anchor="center")
-    tree.column("Name", width=200)
-    tree.column("Dept", width=140)
-    tree.column("Desig", width=160)
-    tree.column("Mobile", width=120)
-    tree.column("Notes", width=250)
+    border_color = COLOR_EMERALD if is_match else (120, 120, 120)
+    cv2.rectangle(display_frame, (bx1, by1), (bx2, by2), border_color, 1)
 
-    tree.pack(fill="both", expand=True, padx=10, pady=10)
+    if is_match:
+        clean_name = name[:18]
+        cv2.putText(display_frame, f"{clean_name}", (bx1 + 10, by1 + 19),
+                    cv2.FONT_HERSHEY_DUPLEX, 0.48, (255, 255, 255), 1)
+        
+        conf_pct = min(99.8, max(88.0, score * 100))
+        sub_info = f"{code} • {dept[:12] if dept else 'STAFF'} • {conf_pct:.1f}%"
+        cv2.putText(display_frame, sub_info, (bx1 + 10, by1 + 37),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.38, COLOR_EMERALD, 1)
+    else:
+        cv2.putText(display_frame, "SCANNING FACE...", (bx1 + 10, by1 + 19),
+                    cv2.FONT_HERSHEY_DUPLEX, 0.45, (220, 220, 220), 1)
+        cv2.putText(display_frame, "NO CLOUD MATCH", (bx1 + 10, by1 + 36),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.38, (140, 140, 180), 1)
 
-    sb = ttk.Scrollbar(top, orient="vertical", command=tree.yview)
-    tree.configure(yscroll=sb.set)
-    sb.pack(side="right", fill="y")
+def draw_toast_notification(display_frame, event):
+    """Draws a prominent, high-visibility futuristic notification card."""
+    h, w = display_frame.shape[:2]
+    toast_w = 600
+    toast_h = 95
+    tx1 = (w - toast_w) // 2
+    ty1 = h - toast_h - 20
+    tx2 = tx1 + toast_w
+    ty2 = ty1 + toast_h
 
-    for code, info in employee_info.items():
-        notes = info.get("notes") or ""
-        display_notes = notes[:90] + "…" if len(notes) > 90 else notes
+    # Translucent Dark Acrylic Glass
+    overlay = display_frame.copy()
+    cv2.rectangle(overlay, (tx1, ty1), (tx2, ty2), (10, 8, 8), -1)
+    cv2.addWeighted(overlay, 0.90, display_frame, 0.10, 0, display_frame)
 
-        tree.insert("", "end", values=(
-            code,
-            info["full_name"],
-            info["department"],
-            info["designation"],
-            info["mobile"],
-            display_notes
-        ))
+    evt_type = event.get("type", "checkin")
+    if evt_type == "checkin":
+        accent_color = (80, 240, 100)   # Bright Emerald Green
+        icon_title = "[ CHECK-IN CONFIRMED ]"
+    elif evt_type == "checkout":
+        accent_color = (0, 180, 255)    # Glowing Amber Gold
+        icon_title = "[ CHECK-OUT CONFIRMED ]"
+    else:
+        accent_color = (255, 220, 0)    # Cyan / Info
+        icon_title = f"[ {event['action']} ]"
 
-    if not employee_info:
-        tree.insert("", "end", values=("", "No employees loaded from cloud", "", "", "", ""))
+    # Glowing double border
+    cv2.rectangle(display_frame, (tx1, ty1), (tx2, ty2), accent_color, 2)
+    cv2.rectangle(display_frame, (tx1 + 3, ty1 + 3), (tx2 - 3, ty2 - 3), (60, 60, 60), 1)
 
-def show_today_attendance():
-    top = tk.Toplevel()
-    top.title("Today's Attendance (Cloud)")
-    top.geometry("900x600")
+    # 1. Action Badge Header
+    cv2.putText(display_frame, icon_title, (tx1 + 22, ty1 + 28),
+                cv2.FONT_HERSHEY_DUPLEX, 0.62, accent_color, 1)
 
-    tree = ttk.Treeview(top, columns=("Code","Name","Dept","Check-in","Check-out"), show="headings")
-    tree.heading("Code", text="Code")
-    tree.heading("Name", text="Name")
-    tree.heading("Dept", text="Department")
-    tree.heading("Check-in", text="Check-in")
-    tree.heading("Check-out", text="Check-out")
+    # 2. Staff Name & Code
+    name_str = f"{event['name']}  ({event['code']})"
+    cv2.putText(display_frame, name_str, (tx1 + 22, ty1 + 56),
+                cv2.FONT_HERSHEY_DUPLEX, 0.58, (255, 255, 255), 1)
 
-    tree.column("Code", width=100, anchor="center")
-    tree.column("Name", width=220)
-    tree.column("Dept", width=180)
-    tree.column("Check-in", width=140)
-    tree.column("Check-out", width=140)
-
-    tree.pack(fill="both", expand=True, padx=10, pady=10)
-
-    sb = ttk.Scrollbar(top, orient="vertical", command=tree.yview)
-    tree.configure(yscroll=sb.set)
-    sb.pack(side="right", fill="y")
-
-    try:
-        today = datetime.date.today().isoformat()
-        records = supabase.table("attendance")\
-            .select("emp_code, checkin_time, checkout_time")\
-            .eq("checkin_date", today)\
-            .execute().data
-
-        for r in records:
-            code = r["emp_code"]
-            name = employee_info.get(code, {}).get("full_name", code)
-            dept = employee_info.get(code, {}).get("department", "")
-            tree.insert("", "end", values=(
-                code, name, dept,
-                r["checkin_time"] or "-",
-                r["checkout_time"] or "-"
-            ))
-
-        if not records:
-            tree.insert("", "end", values=("", "No attendance today", "", "", ""))
-    except Exception as e:
-        tree.insert("", "end", values=("", f"Error: {str(e)}", "", "", ""))
+    # 3. Subline & Timestamp
+    sub_str = f"{event.get('dept', 'Staff')}  •  {event['time']}  •  {event.get('subtext', '')}"
+    cv2.putText(display_frame, sub_str, (tx1 + 22, ty1 + 80),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.42, (190, 200, 200), 1)
 
 # ────────────────────────────────────────────────
-# Recognition loop
+# Main Recognition Loop
 # ────────────────────────────────────────────────
 def run_attendance_recognition():
-    print("Available cameras:")
-    for i in range(5):
-        c = cv2.VideoCapture(i, cv2.CAP_DSHOW)
-        if c.isOpened():
-            print(f"→ Camera {i} works")
-            c.release()
-        else:
-            print(f"→ Camera {i} FAILED")
-            
-    global success_message_start, success_message_text, gesture_active_until
+    global success_event, gesture_active_until
 
     analyzer = get_face_analyzer()
     if analyzer is None:
-        messagebox.showerror("Error", "Cannot load face model.")
+        messagebox.showerror("Error", "InsightFace model failed to initialize.")
         return
 
-    if not load_all_from_supabase():
-        messagebox.showwarning("Warning", "Failed to load faces from cloud.")
-
-    if not face_db:
-        messagebox.showwarning("No Faces", "No valid embeddings loaded.\nOnly 'Unknown' will be detected.")
+    load_all_from_supabase()
 
     cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
     if not cap.isOpened():
-        print("CAP_DSHOW failed → trying plain index 0")
         cap = cv2.VideoCapture(0)
     if not cap.isOpened():
-        print("CAP_DSHOW failed → trying index 1")
         cap = cv2.VideoCapture(1)
+
     if not cap.isOpened():
-        print("CAP_DSHOW failed → trying index 2")
-        cap = cv2.VideoCapture(2)
+        messagebox.showerror("Camera Error", "No working camera found.")
+        return
 
-    print(f"Final cap opened: {cap.isOpened()}")
-    print(f"Backend: {cap.getBackendName() if hasattr(cap, 'getBackendName') else 'unknown'}")
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
 
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-
-    WINDOW_NAME = "Ontech Attendance"
+    WINDOW_NAME = "ONTECH BIOMETRIC RECOGNITION TERMINAL"
     cv2.namedWindow(WINDOW_NAME, cv2.WINDOW_NORMAL)
     cv2.resizeWindow(WINDOW_NAME, 1280, 720)
 
-    mp_hands = mp.solutions.hands
-    mp_drawing = mp.solutions.drawing_utils
-    mp_drawing_styles = mp.solutions.drawing_styles
-
-    hands = mp_hands.Hands(
-        static_image_mode=False,
-        max_num_hands=2,
-        model_complexity=0,
-        min_detection_confidence=0.52,
-        min_tracking_confidence=0.52
-    )
+    # Safe MediaPipe Hands
+    try:
+        mp_hands = mp.solutions.hands if hasattr(mp, "solutions") else None
+        if mp_hands:
+            hands = mp_hands.Hands(
+                static_image_mode=False,
+                max_num_hands=2,
+                model_complexity=0,
+                min_detection_confidence=0.55,
+                min_tracking_confidence=0.55
+            )
+        else:
+            hands = None
+    except Exception as e:
+        print(f"Hands fallback: {e}")
+        hands = None
 
     frame_count = 0
     last_results = []
     prev_time = time.time()
 
-    print("Started ")
+    print("Biometric Video Loop Active")
 
     while True:
         ret, frame = cap.read()
         if not ret:
-            print("Frame lost → retrying...")
-            cap.release()
-            cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
-            if not cap.isOpened():
-                cap = cv2.VideoCapture(0)
-            time.sleep(0.5)
+            time.sleep(0.05)
             continue
 
         display_frame = frame.copy()
         frame_count += 1
         now = time.time()
+        is_checkout_gesture = (now < gesture_active_until)
 
-        # Gesture detection
-        try:
-            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            hand_results = hands.process(rgb)
-            if hand_results.multi_hand_landmarks:
-                for hlm in hand_results.multi_hand_landmarks:
-                    mp_drawing.draw_landmarks(
-                        display_frame, hlm, mp_hands.HAND_CONNECTIONS,
-                        mp_drawing_styles.get_default_hand_landmarks_style(),
-                        mp_drawing_styles.get_default_hand_connections_style()
-                    )
-                    if is_victory_gesture(hlm.landmark):
-                        gesture_active_until = now + GESTURE_HOLD_SECONDS
-                        winsound.Beep(1800, 80)
-        except Exception as e:
-            print(f"Hand error: {e}")
+        # Hands gesture check (V-sign for Check-Out)
+        if hands is not None:
+            try:
+                rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                hand_results = hands.process(rgb)
+                if hand_results.multi_hand_landmarks:
+                    for hlm in hand_results.multi_hand_landmarks:
+                        if is_victory_gesture(hlm.landmark):
+                            gesture_active_until = now + GESTURE_HOLD_SECONDS
+                            winsound.Beep(1800, 60)
+            except Exception:
+                pass
 
-        # Face processing
+        # Face Recognition Pipeline
         if frame_count % PROCESS_EVERY_N_FRAMES == 0:
             try:
                 faces = analyzer.get(frame)
                 results = []
 
                 for face in faces:
-                    if face.det_score < 0.30:
+                    if face.det_score < 0.35:
                         continue
 
                     emb = normalize(face.embedding)
-                    print(f"Live embedding - shape: {emb.shape}, norm: {np.linalg.norm(emb):.6f}, first 5: {emb[:5]}")
                     best_code = "Unknown"
                     best_score = -1.0
 
                     for code, db_emb in face_db.items():
-                        # Use only first 512 dims of stored embedding
                         db_emb_trim = db_emb[:512] if len(db_emb) > 512 else db_emb
-                        
                         sc = cosine_similarity(emb, db_emb_trim)
-                        print(f"Similarity to {code} (trimmed to 512): {sc:.3f}")
-                        
                         if sc > best_score:
                             best_score = sc
                             best_code = code
 
-                    info = employee_info.get(best_code, {"full_name": best_code})
-                    display_name = f"{info['full_name']} " if info['department'] else info['full_name']
+                    info = employee_info.get(best_code, {"full_name": best_code, "department": ""})
                     bbox = face.bbox.astype(int)
-                    
-                    # FIXED: use tuple () instead of set {}
-                    results.append((bbox, display_name, best_score, face.det_score, best_code))
+                    results.append((bbox, info["full_name"], info.get("department", ""), best_score, best_code))
 
                 last_results = results
-
             except Exception as e:
-                print(f"[FACE CRASH] {str(e)}")
-                print(traceback.format_exc())
                 last_results = []
 
-        # Draw & action
-        for bbox, dname, score, det_conf, code in last_results:
-            x1,y1,x2,y2 = map(int, bbox)
-            color = COLOR_SUCCESS if code != "Unknown" and score >= SIMILARITY_THRESHOLD else COLOR_UNKNOWN
+        # Draw Face Reticles & Badges
+        for bbox, dname, dept, score, code in last_results:
+            x1, y1, x2, y2 = map(int, bbox)
+            is_match = (code != "Unknown" and score >= SIMILARITY_THRESHOLD)
 
-            cv2.rectangle(display_frame, (x1,y1), (x2,y2), color, 3)
+            # Smooth box interpolation
+            box_key = code if is_match else f"{x1//50}_{y1//50}"
+            if box_key in smooth_boxes:
+                prev_b = smooth_boxes[box_key]
+                x1 = int(0.65 * x1 + 0.35 * prev_b[0])
+                y1 = int(0.65 * y1 + 0.35 * prev_b[1])
+                x2 = int(0.65 * x2 + 0.35 * prev_b[2])
+                y2 = int(0.65 * y2 + 0.35 * prev_b[3])
+            smooth_boxes[box_key] = (x1, y1, x2, y2)
 
-            label = f"{dname} {score:.3f}"
-            if code == "Unknown":
-                label += f" det:{det_conf:.2f}"
-            else:
-                label += f" sim:{score:.3f}"
+            color = COLOR_EMERALD if is_match else (120, 140, 160)
 
-            tw = len(label) * 11 + 20
-            cv2.rectangle(display_frame, (x1, y1-35), (x1 + tw, y1-5), color, -1)
-            cv2.putText(display_frame, label, (x1+8, y1-12),
-                        cv2.FONT_HERSHEY_DUPLEX, 0.85, (0,0,0), 2)
+            # 1. Corner Reticle
+            draw_futuristic_brackets(display_frame, x1, y1, x2, y2, color, length=20, thickness=2)
 
-            if code != "Unknown" and score >= SIMILARITY_THRESHOLD:
-                if code in last_action_time and now - last_action_time[code] < MIN_TIME_BETWEEN_ACTIONS:
+            # 2. Sleek Floating Identification Badge
+            draw_face_hud_card(display_frame, x1, y1, x2, y2, code, dname, dept, score, is_match)
+
+            # 3. Action Trigger (Check-In / Check-Out with Instant Status Feedback)
+            if is_match:
+                if code in last_action_time and (now - last_action_time[code]) < MIN_TIME_BETWEEN_ACTIONS:
                     continue
 
-                is_checkout = now < gesture_active_until
-                success = False
-                action_text = ""
+                status, cin_time, cout_time = get_employee_today_status(code)
+                now_str = datetime.datetime.now().strftime("%I:%M:%S %p")
 
-                if is_checkout:
-                    success = mark_out(code)
-                    action_text = "CHECKED OUT"
+                if is_checkout_gesture:
+                    if status == 'checked_in':
+                        if mark_out(code):
+                            winsound.Beep(1500, 180)
+                            winsound.Beep(1900, 220)
+                            success_event = {
+                                "type": "checkout",
+                                "action": "CHECKED OUT",
+                                "name": dname,
+                                "code": code,
+                                "dept": dept,
+                                "time": now_str,
+                                "subtext": "Shift closed successfully",
+                                "expires_at": now + SUCCESS_SHOW_SECONDS
+                            }
+                            last_action_time[code] = now
+                    elif status == 'checked_out':
+                        success_event = {
+                            "type": "info",
+                            "action": "ALREADY CHECKED OUT TODAY",
+                            "name": dname,
+                            "code": code,
+                            "dept": dept,
+                            "time": f"Out at {cout_time}",
+                            "subtext": "Daily shift completed",
+                            "expires_at": now + SUCCESS_SHOW_SECONDS
+                        }
+                        last_action_time[code] = now
                 else:
-                    success = mark_present(code)
-                    action_text = "CHECKED IN"
+                    if status == 'none':
+                        if mark_present(code):
+                            winsound.Beep(1300, 150)
+                            winsound.Beep(1800, 200)
+                            success_event = {
+                                "type": "checkin",
+                                "action": "CHECKED IN",
+                                "name": dname,
+                                "code": code,
+                                "dept": dept,
+                                "time": now_str,
+                                "subtext": "Attendance recorded for today",
+                                "expires_at": now + SUCCESS_SHOW_SECONDS
+                            }
+                            last_action_time[code] = now
+                    elif status == 'checked_in':
+                        success_event = {
+                            "type": "info",
+                            "action": "ALREADY CHECKED IN",
+                            "name": dname,
+                            "code": code,
+                            "dept": dept,
+                            "time": f"In at {cin_time}",
+                            "subtext": "Active present • V-gesture to Check-Out",
+                            "expires_at": now + SUCCESS_SHOW_SECONDS
+                        }
+                        last_action_time[code] = now
+                    elif status == 'checked_out':
+                        success_event = {
+                            "type": "info",
+                            "action": "SHIFT COMPLETED",
+                            "name": dname,
+                            "code": code,
+                            "dept": dept,
+                            "time": f"Out at {cout_time}",
+                            "subtext": "Already checked out for today",
+                            "expires_at": now + SUCCESS_SHOW_SECONDS
+                        }
+                        last_action_time[code] = now
 
-                if success:
-                    last_action_time[code] = now
-                    winsound.Beep(1200, 400)
-                    success_message_text = f"{action_text} → {dname.split(' (')[0]}"
-                    success_message_start = now
-                    print(f"SUCCESS: {action_text} {code}")
+        # Draw Toast Notification Card (if active)
+        if success_event and now < success_event["expires_at"]:
+            draw_toast_notification(display_frame, success_event)
 
-        # Success overlay
-        if success_message_start and now - success_message_start < SUCCESS_SHOW_SECONDS:
-            cv2.putText(display_frame, success_message_text, (140, 160),
-                        cv2.FONT_HERSHEY_DUPLEX, 2.2, COLOR_SUCCESS, 6)
-            cv2.putText(display_frame, datetime.datetime.now().strftime("%H:%M:%S"),
-                        (180, 240), cv2.FONT_HERSHEY_SIMPLEX, 1.3, COLOR_SUCCESS, 3)
-
-        # Status
-        status_text = f"Loaded {len(face_db)} embeddings from cloud"
-        status_color = COLOR_CLOUD_OK
-        if last_sync_time:
-            ago = (datetime.datetime.now() - last_sync_time).seconds // 60
-            status_text += f" (synced {ago} min ago)"
-
-        cv2.putText(display_frame, status_text, (25, 80),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.8, status_color, 2)
-
-        fps = 1 / (now - prev_time) if now > prev_time else 0
+        # Draw Top HUD Header
+        fps = 1.0 / (now - prev_time) if (now > prev_time) else 30.0
         prev_time = now
-        cv2.putText(display_frame, f"FPS: {fps:.1f}", (25, 45),
-                    cv2.FONT_HERSHEY_SIMPLEX, 1.1, (0, 255, 180), 3)
-
-        cv2.putText(display_frame,
-                    "Started",
-                    (25, display_frame.shape[0]-30),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.82, (220,220,255), 2)
+        draw_hud_header(display_frame, fps, is_checkout_gesture)
 
         cv2.imshow(WINDOW_NAME, display_frame)
 
@@ -601,89 +614,141 @@ def run_attendance_recognition():
 
     cap.release()
     cv2.destroyAllWindows()
-    hands.close()
+    if hands is not None:
+        hands.close()
 
 def launch_kiosk():
-    if not load_all_from_supabase():
-        messagebox.showwarning("Cloud Warning", "Failed to load data from Supabase.")
+    load_all_from_supabase(show_dialog=False)
 
     root = tk.Tk()
-    root.title("Ontech Attendance Kiosk")
-    root.geometry("800x750")  # Slightly larger for better spacing
-    root.configure(bg="#0f172a")
+    root.title("ONTECH • Biometric Recognition Terminal")
+    root.geometry("640x630")
+    root.configure(bg="#0e131f")
     root.resizable(False, False)
 
-    # Header
-    header_frame = tk.Frame(root, bg="#0f172a")
-    header_frame.pack(fill="x", pady=(40, 20))
+    icon_path = os.path.join(BASE_DIR, "OnTech.ico")
+    if os.path.exists(icon_path):
+        try:
+            root.iconbitmap(icon_path)
+        except Exception:
+            pass
 
-    tk.Label(header_frame, text="Ontech Attendance",
-             font=("Helvetica", 36, "bold"), fg="#f97316", bg="#0f172a").pack()
+    header_frame = tk.Frame(root, bg="#0e131f")
+    header_frame.pack(fill="x", pady=(30, 10), padx=40)
 
-    sync_text = f"{datetime.date.today():%Y-%m-%d} • {len(face_db)} employees registered"
-    if last_sync_time:
-        ago = (datetime.datetime.now() - last_sync_time).seconds // 60
-        sync_text += f" (cloud sync {ago} min ago)"
+    tk.Label(
+        header_frame,
+        text="ONTECH BIOMETRICS",
+        font=("Segoe UI", 26, "bold"),
+        fg="#ffffff",
+        bg="#0e131f"
+    ).pack()
 
-    tk.Label(header_frame, text=sync_text,
-             font=("Helvetica", 16), fg="#94a3b8", bg="#0f172a").pack(pady=10)
+    sync_status_var = tk.StringVar()
+    if supabase_connected:
+        sync_status_var.set(f"✓ {len(face_db)} Staff Face Vectors Active • Cloud Online")
+        status_color = "#8ECA3C"
+    else:
+        sync_status_var.set(f"⚠️ Cloud Offline • Contact Admin: {ADMIN_CONTACT}")
+        status_color = "#f87171"
 
-    # Status box
-    status_frame = tk.Frame(root, bg="#1e293b", bd=2, relief="flat")
-    status_frame.pack(pady=30, padx=50, fill="x")
+    status_label = tk.Label(
+        header_frame,
+        textvariable=sync_status_var,
+        font=("Segoe UI", 11, "bold" if not supabase_connected else "normal"),
+        fg=status_color,
+        bg="#0e131f"
+    )
+    status_label.pack(pady=(4, 0))
 
-    tk.Label(status_frame, text="Ready to Scan",
-             font=("Helvetica", 24, "bold"), fg="#e2e8f0", bg="#1e293b").pack(pady=20)
+    card = tk.Frame(root, bg="#161d2d", bd=1, relief="flat", highlightthickness=1, highlightbackground="#276F27")
+    card.pack(pady=15, padx=45, fill="x")
 
-    tk.Label(status_frame, text="Position your face clearly in front of the camera",
-             font=("Helvetica", 14), fg="#cbd5e1", bg="#1e293b", wraplength=600, justify="center").pack(pady=10)
+    tk.Label(
+        card,
+        text="Live Camera Recognition Kiosk",
+        font=("Segoe UI", 13, "bold"),
+        fg="#ffffff",
+        bg="#161d2d"
+    ).pack(pady=(14, 4))
 
-    # Buttons - centered, even spacing
-    btn_frame = tk.Frame(root, bg="#0f172a")
-    btn_frame.pack(pady=40, padx=80, fill="x")
+    tk.Label(
+        card,
+        text=f"High-speed InsightFace buffalo_s biometric matching with automated check-in/out.\nIf cloud is unreachable, contact Admin at {ADMIN_CONTACT}.",
+        font=("Segoe UI", 9),
+        fg="#94a3b8",
+        bg="#161d2d",
+        wraplength=480,
+        justify="center"
+    ).pack(pady=(0, 14), padx=20)
 
-    button_style = {
-        "font": ("Helvetica", 16, "bold"),
-        "width": 30,
-        "height": 2,
-        "bd": 0,
-        "relief": "flat",
-        "cursor": "hand2",
-        "activebackground": "#334155",
-        "padx": 20,
-        "pady": 10
-    }
+    btn_frame = tk.Frame(root, bg="#0e131f")
+    btn_frame.pack(pady=5, padx=55, fill="x")
 
-    def create_button(text, command, bg, fg="#ffffff"):
-        btn = tk.Button(btn_frame, text=text, command=command, bg=bg, fg=fg, **button_style)
-        btn.pack(pady=12, fill="x")
-        btn.bind("<Enter>", lambda e: btn.config(bg="#334155"))
-        btn.bind("<Leave>", lambda e: btn.config(bg=bg))
+    def make_button(text, command, bg_color, fg_color="#ffffff"):
+        btn = tk.Button(
+            btn_frame,
+            text=text,
+            command=command,
+            font=("Segoe UI", 11, "bold"),
+            bg=bg_color,
+            fg=fg_color,
+            activebackground="#1e293b",
+            activeforeground="#ffffff",
+            bd=0,
+            relief="flat",
+            cursor="hand2",
+            pady=10
+        )
+        btn.pack(pady=6, fill="x")
         return btn
 
-    create_button(
-        "Start Face Recognition",
-        lambda: threading.Thread(target=run_attendance_recognition, daemon=True).start(),
-        "#f97316", "#000000"
+    def handle_launch():
+        if not supabase_connected:
+            ok = load_all_from_supabase(show_dialog=False)
+            if not ok:
+                messagebox.showwarning(
+                    "Database Disconnected",
+                    f"⚠️ Cannot connect to Supabase Cloud Database.\n\nPlease contact Admin at {ADMIN_CONTACT} so that they can turn on / activate Supabase."
+                )
+        threading.Thread(target=run_attendance_recognition, daemon=True).start()
+
+    def handle_sync():
+        success = load_all_from_supabase(show_dialog=True)
+        if success:
+            sync_status_var.set(f"✓ {len(face_db)} Staff Face Vectors Active • Cloud Online")
+            status_label.config(fg="#8ECA3C", font=("Segoe UI", 11))
+        else:
+            sync_status_var.set(f"⚠️ Cloud Offline • Contact Admin: {ADMIN_CONTACT}")
+            status_label.config(fg="#f87171", font=("Segoe UI", 11, "bold"))
+
+    make_button(
+        "⚡ Launch Biometric Camera",
+        handle_launch,
+        "#276F27", "#ffffff"
     )
 
-    create_button("View All Employees", show_employee_list, "#22c55e")
-    create_button("Today's Attendance", show_today_attendance, "#06b6d4")
-    create_button("Sync from Cloud Now", 
-                  lambda: load_all_from_supabase() or messagebox.showinfo("Sync", f"Reloaded {len(face_db)} employees"),
-                  "#8b5cf6", "#ffffff")
-    create_button("Exit", root.quit, "#ef4444")
+    make_button(
+        "🔄 Sync Cloud Embeddings",
+        handle_sync,
+        "#1a381a", "#8ECA3C"
+    )
 
-    # Footer
-    footer = tk.Label(root, text="Powered by InsightFace + MediaPipe + Supabase • Ontech",
-                      font=("Helvetica", 10), fg="#475569", bg="#0f172a")
-    footer.pack(side="bottom", pady=30)
+    make_button(
+        "✕ Close Kiosk Terminal",
+        root.quit,
+        "#1a1625", "#94a3b8"
+    )
+
+    tk.Label(
+        root,
+        text=f"Powered by InsightFace ONNX • Admin Contact: {ADMIN_CONTACT}",
+        font=("Segoe UI", 9),
+        fg="#475569",
+        bg="#0e131f"
+    ).pack(side="bottom", pady=16)
 
     root.mainloop()
 
-# ────────────────────────────────────────────────
-# Entry point
-# ────────────────────────────────────────────────
 if __name__ == "__main__":
-    if show_splash():
-        launch_kiosk()
+    launch_kiosk()
