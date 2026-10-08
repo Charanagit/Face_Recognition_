@@ -82,7 +82,7 @@ An enterprise-grade, real-time **AI-Powered Face Attendance and Workforce Manage
 
 ## 🚀 Quick Start Guide
 
-### Option A: Run the Pre-Packaged Desktop App (For Recruiters / Reviewers)
+### Option A: Run the Pre-Packaged Desktop App 
 > No Python, CUDA, or model downloads required!
 
 1. Go to the [Releases](../../releases) tab on this repository.
