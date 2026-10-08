@@ -29,7 +29,7 @@ except Exception as e:
 # ────────────────────────────────────────────────
 # Page config — MUST BE FIRST
 # ────────────────────────────────────────────────
-st.set_page_config(page_title="Ontech Employee Manager", layout="wide")
+st.set_page_config(page_title="FaceRec Employee Manager", layout="wide")
 
 # Force Colombo time (UTC+5:30, same as Mumbai/IST)
 COLOMBO_TZ = pytz.timezone("Asia/Colombo")
@@ -274,7 +274,7 @@ def process_employee(emp_code, full_name, department, designation, mobile, notes
 # ────────────────────────────────────────────────
 # Main UI & Navigation
 # ────────────────────────────────────────────────
-st.title("🧑‍💼 Ontech Employee & Attendance Manager")
+st.title("🧑‍💼 FaceRec Employee & Attendance Manager")
 st.markdown(f"<h3 style='color:{PURPLE_ACCENT};'>Admin Control Panel</h3>", unsafe_allow_html=True)
 
 page = st.sidebar.radio(

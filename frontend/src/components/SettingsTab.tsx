@@ -28,7 +28,7 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
 
   const supabaseUrl = "https://crujjurupavknjwdjjmj.supabase.co";
 
-  const sqlSchema = `-- OnTech Face Attendance Supabase PostgreSQL Schema
+  const sqlSchema = `-- FaceRec AI Biometric Attendance Supabase PostgreSQL Schema
 
 -- 1. Employees Table
 CREATE TABLE IF NOT EXISTS employees (

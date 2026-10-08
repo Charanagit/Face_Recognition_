@@ -71,7 +71,7 @@ export const Navbar: React.FC<NavbarProps> = ({
             </div>
             <div>
               <div className="flex items-center space-x-2">
-                <span className="text-xl font-black tracking-tight text-black">ONTECH</span>
+                <span className="text-xl font-black tracking-tight text-black">FACEREC</span>
                 <span className="text-[10px] px-2 py-0.5 rounded-full bg-[#8ECA3C] text-black font-black uppercase tracking-wider">
                   Admin
                 </span>

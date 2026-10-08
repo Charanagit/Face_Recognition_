@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "ONTECH • Face Recognition & Attendance Management System",
+  title: "FaceRec • Face Recognition & Attendance Management System",
   description: "Enterprise biometric facial recognition and employee attendance tracking platform powered by Next.js & Supabase.",
 };
 

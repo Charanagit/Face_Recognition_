@@ -1,4 +1,4 @@
-# 🏢 OnTech AI Biometric Face Attendance System
+# 🏢 FaceRec • AI Biometric Face Attendance System
 
 [![Next.js](https://img.shields.io/badge/Next.js-15.2.0-black?style=flat-square&logo=next.js)](https://nextjs.org/)
 [![React](https://img.shields.io/badge/React-19.0.0-61DAFB?style=flat-square&logo=react)](https://react.dev/)
@@ -86,9 +86,9 @@ An enterprise-grade, real-time **AI-Powered Face Attendance and Workforce Manage
 > No Python, CUDA, or model downloads required!
 
 1. Go to the [Releases](../../releases) tab on this repository.
-2. Download `OntechAttendanceKiosk_Standalone.zip`.
+2. Download `facerec_Standalone.zip`.
 3. Extract the ZIP folder on any Windows PC.
-4. Double-click **`Ontech Attendance Kiosk.exe`** to launch the camera recognition terminal.
+4. Double-click **`facerec.exe`** to start biometric facial recognition.
 
 ---
 

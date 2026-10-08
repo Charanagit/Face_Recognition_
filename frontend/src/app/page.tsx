@@ -54,7 +54,7 @@ export default function Home() {
         }));
         setEmployees(mappedEmployees);
       } else {
-        const saved = localStorage.getItem("ontech_employees");
+        const saved = localStorage.getItem("facerec_employees");
         if (saved) {
           setEmployees(JSON.parse(saved));
         }
@@ -84,7 +84,7 @@ export default function Home() {
 
         setAttendance(enrichedAttendance);
       } else {
-        const savedAtt = localStorage.getItem("ontech_attendance");
+        const savedAtt = localStorage.getItem("facerec_attendance");
         if (savedAtt) {
           setAttendance(JSON.parse(savedAtt));
         }
@@ -92,9 +92,9 @@ export default function Home() {
     } catch (err) {
       console.warn("Supabase fetch error, running in local database mode:", err);
       setSupabaseOnline(false);
-      const saved = localStorage.getItem("ontech_employees");
+      const saved = localStorage.getItem("facerec_employees");
       if (saved) setEmployees(JSON.parse(saved));
-      const savedAtt = localStorage.getItem("ontech_attendance");
+      const savedAtt = localStorage.getItem("facerec_attendance");
       if (savedAtt) setAttendance(JSON.parse(savedAtt));
     } finally {
       setIsLoading(false);
@@ -108,13 +108,13 @@ export default function Home() {
   // Save to LocalStorage whenever state changes
   useEffect(() => {
     if (employees.length > 0) {
-      localStorage.setItem("ontech_employees", JSON.stringify(employees));
+      localStorage.setItem("facerec_employees", JSON.stringify(employees));
     }
   }, [employees]);
 
   useEffect(() => {
     if (attendance.length > 0) {
-      localStorage.setItem("ontech_attendance", JSON.stringify(attendance));
+      localStorage.setItem("facerec_attendance", JSON.stringify(attendance));
     }
   }, [attendance]);
 
@@ -366,10 +366,10 @@ export default function Home() {
     return (
       <div className="min-h-screen bg-[#f9fafb] text-[#000000] flex flex-col items-center justify-center space-y-4">
         <div className="w-14 h-14 rounded-2xl bg-[#276F27] flex items-center justify-center animate-pulse shadow-lg">
-          <span className="text-[#ffffff] font-black text-2xl tracking-tighter">ON</span>
+          <span className="text-[#ffffff] font-black text-2xl tracking-tighter">FR</span>
         </div>
         <div className="text-xs font-bold text-[#276F27] tracking-widest uppercase">
-          Loading OnTech Attendance System...
+          Loading FaceRec Attendance System...
         </div>
       </div>
     );
@@ -451,7 +451,7 @@ export default function Home() {
       {/* Clean Footer */}
       <footer className="border-t border-gray-200 bg-[#ffffff] py-6 text-center text-xs text-gray-500">
         <div className="max-w-7xl mx-auto px-4 flex flex-col sm:flex-row items-center justify-between gap-2">
-          <p className="font-semibold text-gray-700">© 2026 ONTECH • Face Recognition Admin Management System</p>
+          <p className="font-semibold text-gray-700">© 2026 FaceRec • AI Biometric Face Recognition Management System</p>
           <p className="text-[11px] font-medium text-[#276F27]">
             Cloud Synchronized Biometric Attendance
           </p>

@@ -52,7 +52,7 @@ else:
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 USER_APPDATA = os.getenv('APPDATA') or os.path.expanduser('~\\AppData\\Roaming')
-APP_DATA_ROOT = os.path.join(USER_APPDATA, 'OntechAttendance')
+APP_DATA_ROOT = os.path.join(USER_APPDATA, 'FaceRecAttendance')
 os.makedirs(APP_DATA_ROOT, exist_ok=True)
 
 # Futuristic Cyber Palette (BGR for OpenCV)
@@ -296,7 +296,7 @@ def draw_hud_header(display_frame, fps, is_checkout_gesture):
     cv2.line(display_frame, (0, header_h), (w, header_h), (70, 70, 60), 1)
 
     # Left: Brand + Status
-    cv2.putText(display_frame, "ONTECH BIOMETRICS", (18, 28),
+    cv2.putText(display_frame, "FACEREC BIOMETRICS", (18, 28),
                 cv2.FONT_HERSHEY_DUPLEX, 0.55, (245, 245, 245), 1)
     
     status_dot_color = (0, 180, 255) if is_checkout_gesture else (80, 240, 100)
@@ -418,7 +418,7 @@ def run_attendance_recognition():
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
 
-    WINDOW_NAME = "ONTECH BIOMETRIC RECOGNITION TERMINAL"
+    WINDOW_NAME = "FACEREC BIOMETRIC RECOGNITION TERMINAL"
     cv2.namedWindow(WINDOW_NAME, cv2.WINDOW_NORMAL)
     cv2.resizeWindow(WINDOW_NAME, 1280, 720)
 
@@ -621,7 +621,7 @@ def launch_kiosk():
     load_all_from_supabase(show_dialog=False)
 
     root = tk.Tk()
-    root.title("ONTECH • Biometric Recognition Terminal")
+    root.title("FACEREC • Biometric Recognition Terminal")
     root.geometry("640x630")
     root.configure(bg="#0e131f")
     root.resizable(False, False)
@@ -638,7 +638,7 @@ def launch_kiosk():
 
     tk.Label(
         header_frame,
-        text="ONTECH BIOMETRICS",
+        text="FACEREC BIOMETRICS",
         font=("Segoe UI", 26, "bold"),
         fg="#ffffff",
         bg="#0e131f"

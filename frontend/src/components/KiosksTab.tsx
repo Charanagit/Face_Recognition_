@@ -24,7 +24,7 @@ export const KiosksTab: React.FC<KiosksTabProps> = ({
   const vectorizedCount = employees.filter((e) => e.has_embedding).length;
   const lastAttendance = attendance[0];
 
-  const launchCommand = `& "C:\\Users\\chara\\OneDrive\\Desktop\\FR\\ontech-face-attendance\\venv\\Scripts\\python.exe" "C:\\Users\\chara\\OneDrive\\Desktop\\face_app\\ontech-face-attendance\\recognize_webcam.py"`;
+  const launchCommand = `python recognize_webcam.py`;
 
   const handleCopy = () => {
     navigator.clipboard.writeText(launchCommand);
