@@ -626,7 +626,9 @@ def launch_kiosk():
     root.configure(bg="#0e131f")
     root.resizable(False, False)
 
-    icon_path = os.path.join(BASE_DIR, "OnTech.ico")
+    icon_path = os.path.join(BASE_DIR, "app.ico")
+    if not os.path.exists(icon_path):
+        icon_path = os.path.join(BASE_DIR, "OnTech.ico")
     if os.path.exists(icon_path):
         try:
             root.iconbitmap(icon_path)
